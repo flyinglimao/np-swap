@@ -64,9 +64,18 @@ contract MasterChef is Ownable {
   // events
   // end of events
 
-  constructor(RewardToken rewardToken_, uint256 rewardPerBlock) {
+  constructor(
+    RewardToken rewardToken_,
+    uint256 rewardPerBlock,
+    address protocolFeeRecipent_,
+    uint256 protocolFee_,
+    uint256 protocolFeeBasis_
+  ) {
     rewardToken = rewardToken_;
     totalWeight.push(Weight(block.number, 0, rewardPerBlock));
+    protocolFeeRecipent = protocolFeeRecipent_;
+    protocolFee = protocolFee_;
+    protocolFeeBasis = protocolFeeBasis_;
   }
 
   /// @notice Get amount of pools
@@ -104,12 +113,6 @@ contract MasterChef is Ownable {
   /// @param poolId Index of the target pool in `poolInfo`
   function updatePool(uint256 poolId) public returns (PoolInfo memory) {
     PoolInfo memory pool = poolInfo[poolId];
-    // Check if updated in current time window, if did, early return
-    // Check if LP token balance is gte 0, if not, early return
-    if (
-      pool.lastRewardBlock == block.number ||
-      pool.lpToken.balanceOf(address(this)) == 0
-    ) return pool;
 
     try pool.pool.onPoolWillUpdate(poolId) returns (bytes4 selector) {
       require(
@@ -133,15 +136,20 @@ contract MasterChef is Ownable {
       uint256 rewardingTo = block.number;
       uint256 weightIndex = totalWeight.length - 1;
       Weight memory rewardingPeriod = totalWeight[weightIndex];
-      do {
+      while (rewardingFrom < rewardingPeriod.blockNumber) {
         // reward per block * pool share * passed blocks
-        poolReward += (((rewardingPeriod.rewardPerBlock * pool.weight) /
-          rewardingPeriod.totalWeight) *
-          (rewardingTo - Math.max(rewardingFrom, rewardingPeriod.blockNumber)));
+        if (rewardingPeriod.totalWeight > 0)
+          poolReward +=
+            ((rewardingPeriod.rewardPerBlock * pool.weight) /
+              rewardingPeriod.totalWeight) *
+            (rewardingTo -
+              Math.max(rewardingFrom, rewardingPeriod.blockNumber));
 
         rewardingTo = rewardingPeriod.blockNumber;
+
+        if (weightIndex == 0) break;
         rewardingPeriod = totalWeight[--weightIndex];
-      } while (rewardingFrom < rewardingPeriod.blockNumber);
+      }
     }
     // Mint protocol fee to protocol fee recipent
     uint256 fee = (poolReward * protocolFee) / protocolFeeBasis;
@@ -149,7 +157,8 @@ contract MasterChef is Ownable {
     poolReward -= fee;
     // Update accRewardPerShare
     //   accRewardPerShare += reward / working balance
-    pool.accRewardPerContribution += poolReward / pool.totalContribution;
+    if (pool.totalContribution > 0)
+      pool.accRewardPerContribution += poolReward / pool.totalContribution;
     // Mark the pool as updated in current time window
     pool.lastRewardBlock = block.number;
 
@@ -276,6 +285,7 @@ contract MasterChef is Ownable {
     PoolInfo storage pool = poolInfo[poolId];
     Weight memory last = totalWeight[totalWeight.length - 1];
     require(address(pool.pool) == msg.sender, "OnlyPools: Not owned");
+    updatePool(poolId);
     totalWeight.push(
       Weight(
         block.number,

@@ -48,6 +48,7 @@ interface IPoolCallbackPoolDidUpdate {
   function onPoolDidUpdate(uint256 poolId) external returns (bytes4);
 }
 
+/// @dev For use as a type, caller should check which method is actually implemented
 interface IPoolCallback is
   IPoolCallbackLPUpdated,
   IPoolCallbackPoolWillUpdate,
