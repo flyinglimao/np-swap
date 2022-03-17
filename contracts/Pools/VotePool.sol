@@ -15,7 +15,8 @@ contract VotePool is Pool, IPoolCallbackLPUpdated {
   uint256 public constant BOOSTING = 4;
   uint256 public constant BOOSTING_BASIS = 10;
 
-  mapping(address => uint256) public userWeight;
+  /// @dev Pool ID => User => Weight, for reuse
+  mapping(uint256 => mapping(address => uint256)) public userWeight;
 
   constructor(MasterChef masterChef_, IERC20 sHakka_) Pool(masterChef_) {
     sHakka = sHakka_;
@@ -27,17 +28,18 @@ contract VotePool is Pool, IPoolCallbackLPUpdated {
   function voteForPoolWeight(uint256 poolId, uint256 weight) external {
     // transfer sHakka from user to pool
     sHakka.transferFrom(msg.sender, address(this), weight);
-    userWeight[msg.sender] += weight;
+    userWeight[poolId][msg.sender] += weight;
     // update pool weight and total weight
     uint256 newWeight = masterChef.getPoolWeight(poolId) + weight;
     masterChef.setWeight(poolId, newWeight);
 
     // update user contribution, maxmium is 2.5x
     uint256 userAmount = masterChef.getUserAmount(poolId, msg.sender);
+    uint256 poolWeight = Math.max(1, masterChef.getPoolWeight(poolId));
     uint256 newContribution = Math.min(
       userAmount,
-      userAmount *
-        (BOOSTING / BOOSTING_BASIS + userWeight[msg.sender] / newWeight)
+      userAmount * BOOSTING / BOOSTING_BASIS + 
+      userAmount * userWeight[poolId][msg.sender] / poolWeight
     );
     // update user reward debt
     masterChef.setUserContribution(poolId, msg.sender, newContribution);
@@ -49,7 +51,7 @@ contract VotePool is Pool, IPoolCallbackLPUpdated {
   function unvoteForPoolWeight(uint256 poolId, uint256 weight) external {
     // transfer sHakka from user to pool
     sHakka.transferFrom(msg.sender, address(this), weight);
-    userWeight[msg.sender] -= weight;
+    userWeight[poolId][msg.sender] -= weight;
 
     // update pool weight and total weight
     uint256 newWeight = masterChef.getPoolWeight(poolId) - weight;
@@ -57,10 +59,11 @@ contract VotePool is Pool, IPoolCallbackLPUpdated {
 
     // update user contribution, maxmium is 2.5x
     uint256 userAmount = masterChef.getUserAmount(poolId, msg.sender);
+    uint256 poolWeight = Math.max(1, masterChef.getPoolWeight(poolId));
     uint256 newContribution = Math.min(
       userAmount,
-      userAmount *
-        (BOOSTING / BOOSTING_BASIS + userWeight[msg.sender] / newWeight)
+      userAmount * BOOSTING / BOOSTING_BASIS + 
+      userAmount * userWeight[poolId][msg.sender] / poolWeight
     );
     // update user reward debt
     // we can't assert if new contribution is higher or lower
@@ -72,12 +75,11 @@ contract VotePool is Pool, IPoolCallbackLPUpdated {
     address user,
     uint256 newAmount
   ) external override onlyMasterChef returns (bytes4) {
+    uint256 poolWeight = Math.max(1, masterChef.getPoolWeight(poolId));
     uint256 newContribution = Math.min(
       newAmount,
-      (newAmount * BOOSTING) /
-        BOOSTING_BASIS +
-        userWeight[user] /
-        masterChef.getPoolWeight(poolId)
+      newAmount * BOOSTING / BOOSTING_BASIS + 
+      newAmount * userWeight[poolId][user] / poolWeight
     );
     // update user reward debt
     // we can't assert if new contribution is higher or lower
