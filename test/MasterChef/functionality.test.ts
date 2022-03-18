@@ -53,47 +53,28 @@ describe("MasterChef Functionality", () => {
   });
 
   it("Should compute reward correctly when update pool", async () => {
-    const weightTx = await pool.setWeight(0, 1);
-    weightBlock = weightTx.blockNumber!;
-    let updateTx = await masterChef.updatePool(0);
-    let poolInfo = await masterChef.poolInfo(0);
-    expect(poolInfo.unsharedReward).equals(
-      rewardPerBlock
-        .mul(updateTx.blockNumber! - weightTx.blockNumber!)
-        .mul(protocolFeeBasis - protocolFee)
-        .div(protocolFeeBasis)
-    );
-
-    await masterChef.deposit(0, hre.ethers.utils.parseEther("1"));
-    updateTx = await masterChef.updatePool(0);
-    poolInfo = await masterChef.poolInfo(0);
+    await pool.setWeight(0, 1);
+    const depositTx = await masterChef.deposit(0, hre.ethers.utils.parseEther("1"));
+    const updateTx = await masterChef.updatePool(0);
+    const poolInfo = await masterChef.poolInfo(0);
     expect(
-      poolInfo.unsharedReward.add(
-        poolInfo.accRewardPerContribution.mul(poolInfo.totalContribution)
-      )
+      poolInfo.accRewardPerContribution.mul(poolInfo.totalContribution)
     ).equals(
       rewardPerBlock
-        .mul(updateTx.blockNumber! - weightTx.blockNumber!)
+        .mul(updateTx.blockNumber! - depositTx.blockNumber!)
         .mul(protocolFeeBasis - protocolFee)
         .div(protocolFeeBasis)
     );
-    expect(poolInfo.unsharedReward.lt(poolInfo.totalContribution)).to.be.true;
   });
 
   it("Should claim reward correctly", async () => {
     const signers = await hre.ethers.getSigners();
-    let updateTx = await masterChef.updatePool(0);
-    expect(await masterChef.callStatic["claimReward(uint256)"](0)).equals(
-      rewardPerBlock
-        .mul(updateTx.blockNumber! - weightBlock!)
-        .mul(protocolFeeBasis - protocolFee)
-        .div(protocolFeeBasis)
-    );
 
     // make withdraw and deposit in same block
     await hre.network.provider.send("evm_setAutomine", [false]);
 
     const txs = Promise.all([
+      masterChef["claimReward(uint256)"](0),
       masterChef.withdraw(0, hre.ethers.utils.parseEther("0.5")),
       masterChef
         .connect(signers[1])
@@ -104,7 +85,7 @@ describe("MasterChef Functionality", () => {
     await hre.network.provider.send("evm_setAutomine", [true]);
     const [withdrawTx, depositTx] = await txs;
 
-    updateTx = await masterChef.updatePool(0);
+    const updateTx = await masterChef.updatePool(0);
 
     expect(await masterChef.callStatic["claimReward(uint256)"](0)).equals(
       rewardPerBlock

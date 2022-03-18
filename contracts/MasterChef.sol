@@ -8,8 +8,6 @@ import "@openzeppelin/contracts/utils/math/Math.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 import "./IPool.sol";
 
-import "hardhat/console.sol";
-
 interface RewardToken {
   function mint(address to, uint256 amount) external;
 }
@@ -38,8 +36,6 @@ contract MasterChef is Ownable {
     uint256 lastRewardBlock;
     // accReward += gain in a time window / total contribution at the moment
     uint256 accRewardPerContribution;
-    // if some rewards wasn't added to accReward, record it in unsharedReward
-    uint256 unsharedReward;
     IPoolCallback pool;
   }
 
@@ -103,7 +99,6 @@ contract MasterChef is Ownable {
       0,
       block.number,
       0,
-      0,
       poolAddr
     );
     poolInfo.push(newPool);
@@ -158,15 +153,11 @@ contract MasterChef is Ownable {
     uint256 fee = (poolReward * protocolFee) / protocolFeeBasis;
     rewardToken.mint(protocolFeeRecipent, fee);
     poolReward -= fee;
-    poolReward += pool.unsharedReward;
 
     // Update accRewardPerShare
     //   accRewardPerShare += reward / working balance
     if (pool.totalContribution > 0) {
       pool.accRewardPerContribution += poolReward / pool.totalContribution;
-      pool.unsharedReward = poolReward % pool.totalContribution;
-    } else {
-      pool.unsharedReward = poolReward;
     }
 
     // Mark the pool as updated in current time window
@@ -312,7 +303,7 @@ contract MasterChef is Ownable {
     uint256 newContribution
   ) external {
     PoolInfo memory pool = updatePool(poolId);
-    UserInfo storage user = userInfo[poolId][userAddr];
+    UserInfo memory user = userInfo[poolId][userAddr];
     require(address(pool.pool) == msg.sender, "OnlyPools: Not owned");
     _claimReward(poolId, userAddr, userAddr);
 
@@ -331,6 +322,7 @@ contract MasterChef is Ownable {
       newContribution;
     user.contribution = newContribution;
 
+    userInfo[poolId][userAddr] = user;
     poolInfo[poolId] = pool;
   }
 
