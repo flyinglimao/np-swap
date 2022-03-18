@@ -8,6 +8,8 @@ import "@openzeppelin/contracts/utils/math/Math.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 import "./IPool.sol";
 
+import "hardhat/console.sol";
+
 interface RewardToken {
   function mint(address to, uint256 amount) external;
 }
@@ -26,7 +28,6 @@ contract MasterChef is Ownable {
     // Controlled by pool contract
     uint256 contribution;
     uint256 rewardDebt; // Reward debt. See explanation below.
-    uint256 weight;
   }
 
   /// @notice Info of each pool
@@ -37,6 +38,8 @@ contract MasterChef is Ownable {
     uint256 lastRewardBlock;
     // accReward += gain in a time window / total contribution at the moment
     uint256 accRewardPerContribution;
+    // if some rewards wasn't added to accReward, record it in unsharedReward
+    uint256 unsharedReward;
     IPoolCallback pool;
   }
 
@@ -100,6 +103,7 @@ contract MasterChef is Ownable {
       0,
       block.number,
       0,
+      0,
       poolAddr
     );
     poolInfo.push(newPool);
@@ -136,7 +140,7 @@ contract MasterChef is Ownable {
       uint256 rewardingTo = block.number;
       uint256 weightIndex = totalWeight.length - 1;
       Weight memory rewardingPeriod = totalWeight[weightIndex];
-      while (rewardingFrom < rewardingPeriod.blockNumber) {
+      do {
         // reward per block * pool share * passed blocks
         if (rewardingPeriod.totalWeight > 0)
           poolReward +=
@@ -144,21 +148,27 @@ contract MasterChef is Ownable {
               rewardingPeriod.totalWeight) *
             (rewardingTo -
               Math.max(rewardingFrom, rewardingPeriod.blockNumber));
-
         rewardingTo = rewardingPeriod.blockNumber;
 
         if (weightIndex == 0) break;
         rewardingPeriod = totalWeight[--weightIndex];
-      }
+      } while (rewardingFrom < rewardingPeriod.blockNumber);
     }
     // Mint protocol fee to protocol fee recipent
     uint256 fee = (poolReward * protocolFee) / protocolFeeBasis;
     rewardToken.mint(protocolFeeRecipent, fee);
     poolReward -= fee;
+    poolReward += pool.unsharedReward;
+
     // Update accRewardPerShare
     //   accRewardPerShare += reward / working balance
-    if (pool.totalContribution > 0)
+    if (pool.totalContribution > 0) {
       pool.accRewardPerContribution += poolReward / pool.totalContribution;
+      pool.unsharedReward = poolReward % pool.totalContribution;
+    } else {
+      pool.unsharedReward = poolReward;
+    }
+
     // Mark the pool as updated in current time window
     pool.lastRewardBlock = block.number;
 
@@ -226,7 +236,7 @@ contract MasterChef is Ownable {
   function deposit(uint256 poolId, uint256 amount) external {
     // user should not be rewarded for prev blocks
     PoolInfo memory pool = updatePool(poolId);
-    UserInfo memory user = userInfo[poolId][msg.sender];
+    UserInfo storage user = userInfo[poolId][msg.sender];
 
     pool.lpToken.safeTransferFrom(msg.sender, address(this), amount);
     user.amount += amount;
@@ -253,10 +263,10 @@ contract MasterChef is Ownable {
   function withdraw(uint256 poolId, uint256 amount) external {
     // user should not be rewarded for prev blocks
     PoolInfo memory pool = updatePool(poolId);
-    UserInfo memory user = userInfo[poolId][msg.sender];
+    UserInfo storage user = userInfo[poolId][msg.sender];
 
     user.amount -= amount;
-    pool.lpToken.safeTransferFrom(address(this), msg.sender, amount);
+    pool.lpToken.transfer(msg.sender, amount);
 
     try pool.pool.onLPUpdated(poolId, msg.sender, user.amount) returns (
       bytes4 selector
@@ -277,11 +287,7 @@ contract MasterChef is Ownable {
   /// @notice Set pool weight
   /// @param poolId Index of the target pool in `poolInfo`
   /// @param newWeight New weight for the pool
-  /// @return pool Updated pool info
-  function setWeight(uint256 poolId, uint256 newWeight)
-    external
-    returns (PoolInfo memory)
-  {
+  function setWeight(uint256 poolId, uint256 newWeight) external {
     PoolInfo storage pool = poolInfo[poolId];
     Weight memory last = totalWeight[totalWeight.length - 1];
     require(address(pool.pool) == msg.sender, "OnlyPools: Not owned");
@@ -294,22 +300,21 @@ contract MasterChef is Ownable {
       )
     );
     pool.weight = newWeight;
-    return pool;
   }
 
   /// @notice Set user contribution and re-compute
   /// @param poolId Index of the target pool in `poolInfo`
   /// @param userAddr Target user's address
   /// @param newContribution New contribution for the user
-  /// @return user Updated user info
   function setUserContribution(
     uint256 poolId,
     address userAddr,
     uint256 newContribution
-  ) external returns (UserInfo memory) {
+  ) external {
     PoolInfo memory pool = updatePool(poolId);
-    UserInfo memory user = userInfo[poolId][userAddr];
+    UserInfo storage user = userInfo[poolId][userAddr];
     require(address(pool.pool) == msg.sender, "OnlyPools: Not owned");
+    _claimReward(poolId, userAddr, userAddr);
 
     if (newContribution > user.contribution) {
       user.rewardDebt +=
@@ -326,10 +331,7 @@ contract MasterChef is Ownable {
       newContribution;
     user.contribution = newContribution;
 
-    userInfo[poolId][msg.sender] = user;
     poolInfo[poolId] = pool;
-
-    return user;
   }
 
   function getPoolWeight(uint256 poolId) external view returns (uint256) {

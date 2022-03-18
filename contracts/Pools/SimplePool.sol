@@ -19,7 +19,6 @@ contract SimplePool is Pool, IPoolCallbackLPUpdated, Ownable {
 
   function onLPUpdated(uint256 poolId, address user, uint256 newAmount) external override onlyMasterChef returns (bytes4) {
     masterChef.setUserContribution(poolId, user, newAmount);
-
     return this.onLPUpdated.selector;
   }
 }
